@@ -23,8 +23,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
-# vLLM only installs cleanly on CUDA Linux; generation.py imports it lazily,
-# so CPU-only environments (e.g. macOS dev) can use the rest of the package.
+# vLLM only installs cleanly on CUDA Linux.
+# generation.py imports it lazily, so CPU-only environments (e.g. macOS dev) can use the rest of the package.
 gpu = ["vllm"]
 
 [build-system]

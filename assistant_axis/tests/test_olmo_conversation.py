@@ -1,8 +1,8 @@
 """
 Tests for Olmo 3 support in ConversationEncoder and model configs.
 
-Uses the real Olmo 3 tokenizer (downloaded from HuggingFace on first run);
-the span logic under test is meaningless against a mocked tokenizer.
+Uses the real Olmo 3 tokenizer, downloaded from HuggingFace on first run.
+The span logic under test is meaningless against a mocked tokenizer.
 """
 
 from typing import Dict, List
@@ -177,8 +177,8 @@ class TestOlmoSpecialIdsGuard:
         assert encoder.tokenizer.eos_token_id in special["terminator_ids"]
 
     def test_tokenizer_without_im_start_returns_none(self) -> None:
-        # gpt2 has no <|im_start|>; an olmo-looking name must not pass the guard
-        # (convert_tokens_to_ids would return the unk id instead of failing)
+        # gpt2 has no <|im_start|>, so an olmo-looking name must not pass the guard.
+        # convert_tokens_to_ids would return the unk id instead of failing.
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
         fake = ConversationEncoder(tokenizer, model_name="my-olmo-variant")
         assert fake._is_olmo()

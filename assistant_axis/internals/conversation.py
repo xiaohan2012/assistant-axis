@@ -259,12 +259,10 @@ class ConversationEncoder:
         """
         Resolve the token ids the Olmo 3 chat template is built from.
 
-        Returns None if the tokenizer does not expose the expected tokens,
-        in which case callers should fall back to the generic methods.
+        Returns None if the tokenizer lacks the expected tokens.
+        Callers then fall back to the generic methods.
         """
-        # Look up via the vocab: convert_tokens_to_ids returns the unk id for
-        # missing tokens (which equals eos for this tokenizer family), so it
-        # cannot be used to detect absence.
+        # Look up via get_vocab: convert_tokens_to_ids maps missing tokens to the unk id (== eos here), so it cannot detect absence.
         vocab = self.tokenizer.get_vocab()
         required = ('<|im_start|>', '<|im_end|>', 'user', 'assistant')
         if any(token not in vocab for token in required):
@@ -274,13 +272,12 @@ class ConversationEncoder:
         user_token_id = vocab['user']
         assistant_token_id = vocab['assistant']
 
-        # The template puts a plain newline after the role name; resolve its id
-        # so it can be excluded from content spans.
+        # The template puts a plain newline after the role name.
+        # Resolve its id so content spans can exclude it.
         newline_ids = self.tokenizer('\n', add_special_tokens=False)['input_ids']
         newline_id = newline_ids[0] if len(newline_ids) == 1 else None
 
-        # Olmo 3 terminates every turn with <|im_end|> except the final
-        # assistant turn, which ends with the EOS token (<|endoftext|>).
+        # Olmo 3 terminates every turn with <|im_end|>, except the final assistant turn, which ends with EOS (<|endoftext|>).
         terminator_ids = {im_end_id}
         if self.tokenizer.eos_token_id is not None:
             terminator_ids.add(self.tokenizer.eos_token_id)
@@ -302,13 +299,11 @@ class ConversationEncoder:
         """
         Content token bounds [start, end) for the turn opening at im_start_pos.
 
-        Skips the single newline the template emits after the role name. If
-        the content itself starts with whitespace, BPE can merge that newline
-        with the content's leading whitespace into a different token
-        (e.g. '\\n\\n'); that merged token is kept, so one template newline then
-        leaks into the span. The turn ends at <|im_end|>, or at EOS on the
-        final turn; an unterminated turn (e.g. truncated text) takes the rest
-        of the sequence.
+        Skips the single newline the template emits after the role name.
+        If the content starts with whitespace, BPE can merge that newline with it into a different token (e.g. '\\n\\n').
+        The merged token is kept, so one template newline then leaks into the span.
+        The turn ends at <|im_end|>, or at EOS on the final turn.
+        An unterminated turn (e.g. truncated text) takes the rest of the sequence.
         """
         content_start = im_start_pos + 2
         if (content_start < len(token_ids) and
@@ -329,12 +324,11 @@ class ConversationEncoder:
         """
         Olmo-specific implementation for extracting response token indices.
 
-        Olmo 3 uses an im_start-style template like Qwen, with the final
-        assistant turn terminated by the EOS token instead of <|im_end|>.
+        Olmo 3 uses an im_start-style template like Qwen, with the final assistant turn terminated by EOS instead of <|im_end|>.
 
-        Written for the Instruct track, which has no thinking tokens. Think
-        checkpoints also match _is_olmo but their reasoning traces are NOT
-        filtered out here; add that before using Think models.
+        Written for the Instruct track, which has no thinking tokens.
+        Think checkpoints also match _is_olmo, but their reasoning traces are NOT filtered here.
+        Add that filtering before using Think models.
         """
         if per_turn:
             all_turn_indices = []
@@ -728,11 +722,9 @@ class ConversationEncoder:
         """
         Build turn spans for Olmo 3 models using pattern matching.
 
-        Mirrors the Qwen approach: content spans run from after the
-        <|im_start|>role marker (and the newline following it) up to the turn
-        terminator. Olmo 3 terminates every turn with <|im_end|> except the
-        final assistant turn, which ends with the EOS token. There are no
-        thinking tokens to filter.
+        Content spans run from after the <|im_start|>role marker and its newline up to the turn terminator, mirroring the Qwen approach.
+        Olmo 3 terminates every turn with <|im_end|>, except the final assistant turn, which ends with EOS.
+        There are no thinking tokens to filter.
         """
         special = self._olmo_special_ids()
         if special is None:
@@ -741,9 +733,8 @@ class ConversationEncoder:
         spans = []
 
         # User/assistant messages, in order, to match against the spans found.
-        # Tool and environment messages render as <|im_start|>environment
-        # blocks, which the scanner skips, so they must not appear here either
-        # or every later turn desynchronizes.
+        # Tool and environment messages render as <|im_start|>environment blocks, which the scanner skips.
+        # They must not appear here either, or every later turn desynchronizes.
         expected_turns = []
         for msg in conversation:
             if msg["role"] in ("user", "assistant"):
@@ -772,9 +763,8 @@ class ConversationEncoder:
                 if turn_idx < len(expected_turns):
                     expected_role, expected_text = expected_turns[turn_idx]
 
-                    # Keep empty turns (start == end) so span positions stay
-                    # aligned with the conversation; downstream consumers index
-                    # spans positionally and must see every user/assistant turn.
+                    # Keep empty turns (start == end) so span positions stay aligned with the conversation.
+                    # Downstream consumers index spans positionally and must see every user/assistant turn.
                     if role == expected_role:
                         spans.append({
                             "turn": turn_idx,
