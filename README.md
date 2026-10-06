@@ -32,6 +32,9 @@ cd assistant-axis
 
 # Install with uv (recommended)
 uv sync
+
+# For GPU generation (vllm, needed by pipeline step 1):
+uv sync --extra gpu
 ```
 
 ## Understanding the Axis

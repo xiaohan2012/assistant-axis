@@ -40,6 +40,32 @@ MODEL_CONFIGS = {
         "capping_config": "llama-3.3-70b/capping_config.pt",
         "capping_experiment": "layers_56:72-p0.25",
     },
+    # Olmo 3 7B Instruct track (persona-shift): one entry per post-training stage.
+    # target_layer 16 is the middle of the 32-layer stack, following Lu et al. (arXiv:2601.10387) and the entries above.
+    # Mid layers are where persona structure is most linearly accessible: early layers carry token-level features, late layers specialize toward the output distribution.
+    # See https://github.com/xiaohan2012/assistant-axis/pull/1#discussion_r4193280663
+    # The base (pre-trained) entry provides layer metadata only.
+    # Its tokenizer has no chat template, so the chat-template encoder paths (ConversationEncoder, ActivationExtractor) do not apply; base-model extraction goes through a document-frame path instead.
+    "allenai/Olmo-3-1025-7B": {
+        "target_layer": 16,
+        "total_layers": 32,
+        "short_name": "Olmo",
+    },
+    "allenai/Olmo-3-7B-Instruct-SFT": {
+        "target_layer": 16,
+        "total_layers": 32,
+        "short_name": "Olmo",
+    },
+    "allenai/Olmo-3-7B-Instruct-DPO": {
+        "target_layer": 16,
+        "total_layers": 32,
+        "short_name": "Olmo",
+    },
+    "allenai/Olmo-3-7B-Instruct": {
+        "target_layer": 16,
+        "total_layers": 32,
+        "short_name": "Olmo",
+    },
 }
 
 
@@ -74,6 +100,8 @@ def get_config(model_name: str) -> dict:
             short_name = "Llama"
         elif "mistral" in model_lower:
             short_name = "Mistral"
+        elif "olmo" in model_lower:
+            short_name = "Olmo"
         else:
             short_name = model_name.split("/")[-1].split("-")[0]
 

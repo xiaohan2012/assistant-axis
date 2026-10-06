@@ -39,6 +39,10 @@ class ConversationEncoder:
         """Check if this is a Gemma model."""
         return 'gemma' in self.model_name
 
+    def _is_olmo(self) -> bool:
+        """Check if this is an Olmo model."""
+        return 'olmo' in self.model_name
+
     def format_chat(
         self,
         conversation: Union[str, List[Dict[str, str]]],
@@ -120,6 +124,8 @@ class ConversationEncoder:
         # Dispatch to model-specific implementation
         if self._is_qwen():
             return self._get_response_indices_qwen(conversation, per_turn, **chat_kwargs)
+        elif self._is_olmo():
+            return self._get_response_indices_olmo(conversation, per_turn, **chat_kwargs)
         elif self._is_llama() or self._is_gemma():
             return self._get_response_indices_gemma(conversation, per_turn, **chat_kwargs)
         else:
@@ -244,6 +250,117 @@ class ConversationEncoder:
                 else:
                     # No matching <|im_end|> found, skip this token
                     i += 1
+            else:
+                i += 1
+
+        return all_turn_indices if per_turn else response_indices
+
+    def _olmo_special_ids(self) -> Optional[Dict[str, Any]]:
+        """
+        Resolve the token ids the Olmo 3 chat template is built from.
+
+        Returns None if the tokenizer lacks the expected tokens.
+        Callers then fall back to the generic methods.
+        """
+        # Look up via get_vocab: convert_tokens_to_ids maps missing tokens to the unk id (== eos here), so it cannot detect absence.
+        vocab = self.tokenizer.get_vocab()
+        required = ('<|im_start|>', '<|im_end|>', 'user', 'assistant')
+        if any(token not in vocab for token in required):
+            return None
+        im_start_id = vocab['<|im_start|>']
+        im_end_id = vocab['<|im_end|>']
+        user_token_id = vocab['user']
+        assistant_token_id = vocab['assistant']
+
+        # The template puts a plain newline after the role name.
+        # Resolve its id so content spans can exclude it.
+        newline_ids = self.tokenizer('\n', add_special_tokens=False)['input_ids']
+        newline_id = newline_ids[0] if len(newline_ids) == 1 else None
+
+        # Olmo 3 terminates every turn with <|im_end|>, except the final assistant turn, which ends with EOS (<|endoftext|>).
+        terminator_ids = {im_end_id}
+        if self.tokenizer.eos_token_id is not None:
+            terminator_ids.add(self.tokenizer.eos_token_id)
+
+        return {
+            'im_start_id': im_start_id,
+            'user_token_id': user_token_id,
+            'assistant_token_id': assistant_token_id,
+            'newline_id': newline_id,
+            'terminator_ids': terminator_ids,
+        }
+
+    @staticmethod
+    def _olmo_content_bounds(
+        token_ids: List[int],
+        im_start_pos: int,
+        special: Dict[str, Any],
+    ) -> Tuple[int, int]:
+        """
+        Content token bounds [start, end) for the turn opening at im_start_pos.
+
+        Skips the single newline the template emits after the role name.
+        If the content starts with whitespace, BPE can merge that newline with it into a different token (e.g. '\\n\\n').
+        The merged token is kept, so one template newline then leaks into the span.
+        The turn ends at <|im_end|>, or at EOS on the final turn.
+        An unterminated turn (e.g. truncated text) takes the rest of the sequence.
+        """
+        content_start = im_start_pos + 2
+        if (content_start < len(token_ids) and
+            token_ids[content_start] == special['newline_id']):
+            content_start += 1
+
+        for j in range(content_start, len(token_ids)):
+            if token_ids[j] in special['terminator_ids']:
+                return content_start, j  # Don't include the terminator token
+        return content_start, len(token_ids)
+
+    def _get_response_indices_olmo(
+        self,
+        conversation: List[Dict[str, str]],
+        per_turn: bool,
+        **chat_kwargs,
+    ) -> Union[List[int], List[List[int]]]:
+        """
+        Olmo-specific implementation for extracting response token indices.
+
+        Olmo 3 uses an im_start-style template like Qwen, with the final assistant turn terminated by EOS instead of <|im_end|>.
+
+        Written for the Instruct track, which has no thinking tokens.
+        Think checkpoints also match _is_olmo, but their reasoning traces are NOT filtered here.
+        Add that filtering before using Think models.
+        """
+        if per_turn:
+            all_turn_indices = []
+        else:
+            response_indices = []
+
+        special = self._olmo_special_ids()
+        if special is None:
+            return self._get_response_indices_simple(conversation, per_turn, **chat_kwargs)
+
+        full_formatted = self.tokenizer.apply_chat_template(
+            conversation, tokenize=False, add_generation_prompt=False, **chat_kwargs
+        )
+        all_token_ids = self.tokenizer(full_formatted, add_special_tokens=False)['input_ids']
+
+        i = 0
+        while i < len(all_token_ids):
+            # Look for the <|im_start|>assistant pattern
+            if (i + 1 < len(all_token_ids) and
+                all_token_ids[i] == special['im_start_id'] and
+                all_token_ids[i + 1] == special['assistant_token_id']):
+
+                response_start, response_end = self._olmo_content_bounds(
+                    all_token_ids, i, special
+                )
+                turn_indices = list(range(response_start, response_end))
+                if per_turn:
+                    all_turn_indices.append(turn_indices)
+                else:
+                    response_indices.extend(turn_indices)
+
+                i = response_end + 1
             else:
                 i += 1
 
@@ -401,6 +518,11 @@ class ConversationEncoder:
         # For Qwen models, use pattern-matching approach (matches persona-subspace behavior)
         if self._is_qwen():
             return self._build_turn_spans_qwen(conversation, full_ids, **chat_kwargs)
+
+        # Olmo uses the same im_start-style pattern matching, with EOS as the
+        # final-turn terminator.
+        if self._is_olmo():
+            return self._build_turn_spans_olmo(conversation, full_ids, **chat_kwargs)
 
         spans = []
         msgs_before = []
@@ -586,6 +708,75 @@ class ConversationEncoder:
                     i = content_end + 1
                 else:
                     i += 1
+            else:
+                i += 1
+
+        return full_ids, spans
+
+    def _build_turn_spans_olmo(
+        self,
+        conversation: List[Dict[str, str]],
+        full_ids: List[int],
+        **chat_kwargs,
+    ) -> Tuple[List[int], List[Dict[str, Any]]]:
+        """
+        Build turn spans for Olmo 3 models using pattern matching.
+
+        Content spans run from after the <|im_start|>role marker and its newline up to the turn terminator, mirroring the Qwen approach.
+        Olmo 3 terminates every turn with <|im_end|>, except the final assistant turn, which ends with EOS.
+        There are no thinking tokens to filter.
+        """
+        special = self._olmo_special_ids()
+        if special is None:
+            return self._build_turn_spans_fallback(conversation, full_ids, **chat_kwargs)
+
+        spans = []
+
+        # User/assistant messages, in order, to match against the spans found.
+        # Tool and environment messages render as <|im_start|>environment blocks, which the scanner skips.
+        # They must not appear here either, or every later turn desynchronizes.
+        expected_turns = []
+        for msg in conversation:
+            if msg["role"] in ("user", "assistant"):
+                expected_turns.append((msg["role"], msg.get("content", "")))
+
+        turn_idx = 0
+        i = 0
+
+        while i < len(full_ids):
+            if i + 1 < len(full_ids) and full_ids[i] == special['im_start_id']:
+                role_token = full_ids[i + 1]
+
+                if role_token == special['user_token_id']:
+                    role = "user"
+                elif role_token == special['assistant_token_id']:
+                    role = "assistant"
+                else:
+                    # system/environment turns are not span targets; keep scanning
+                    i += 1
+                    continue
+
+                content_start, content_end = self._olmo_content_bounds(
+                    full_ids, i, special
+                )
+
+                if turn_idx < len(expected_turns):
+                    expected_role, expected_text = expected_turns[turn_idx]
+
+                    # Keep empty turns (start == end) so span positions stay aligned with the conversation.
+                    # Downstream consumers index spans positionally and must see every user/assistant turn.
+                    if role == expected_role:
+                        spans.append({
+                            "turn": turn_idx,
+                            "role": role,
+                            "start": content_start,
+                            "end": content_end,  # exclusive
+                            "n_tokens": content_end - content_start,
+                            "text": expected_text,
+                        })
+                    turn_idx += 1
+
+                i = content_end + 1
             else:
                 i += 1
 
