@@ -10,6 +10,7 @@
 #   (I RECOMMEND RUNNING STEPS 1 AND 2 INDIVIDUALLY, 3 CAN BE RUN IN PARALLEL ONCE 1 IS DONE)
 #
 # Requirements:
+#   - vllm installed via the gpu extra: uv sync --extra gpu (for step 1)
 #   - OPENAI_API_KEY environment variable (for step 3)
 #   - Sufficient GPU memory for the model
 

@@ -95,6 +95,18 @@ class TestGetResponseIndicesOlmo:
         assert encoder.response_indices(conversation) == []
         assert encoder.response_indices(conversation, per_turn=True) == []
 
+    def test_empty_assistant_turn_kept_as_empty_list(self, encoder: ConversationEncoder) -> None:
+        conversation = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "Say again"},
+            {"role": "assistant", "content": "ok"},
+        ]
+        turns = encoder.response_indices(conversation, per_turn=True)
+        assert len(turns) == 2
+        assert turns[0] == []
+        assert len(turns[1]) > 0
+
 
 class TestBuildTurnSpansOlmo:
     """Tests for build_turn_spans on Olmo 3 conversations."""
@@ -128,6 +140,49 @@ class TestBuildTurnSpansOlmo:
         for span in spans:
             assert span["n_tokens"] == span["end"] - span["start"]
             assert span["n_tokens"] > 0
+
+    def test_tool_turns_do_not_desync_spans(self, encoder: ConversationEncoder) -> None:
+        conversation = [
+            {"role": "user", "content": "What is 2+2?"},
+            {"role": "assistant", "content": "Let me check."},
+            {"role": "tool", "content": "4"},
+            {"role": "assistant", "content": "The answer is 4."},
+        ]
+        full_ids, spans = encoder.build_turn_spans(conversation)
+        assert [s["role"] for s in spans] == ["user", "assistant", "assistant"]
+        decoded_last = encoder.tokenizer.decode(full_ids[spans[-1]["start"]:spans[-1]["end"]])
+        assert decoded_last == "The answer is 4."
+
+    def test_empty_assistant_turn_keeps_span_position(self, encoder: ConversationEncoder) -> None:
+        conversation = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "Say again"},
+            {"role": "assistant", "content": "ok"},
+        ]
+        _, spans = encoder.build_turn_spans(conversation)
+        assert [s["turn"] for s in spans] == [0, 1, 2, 3]
+        assert spans[1]["role"] == "assistant"
+        assert spans[1]["n_tokens"] == 0
+
+
+class TestOlmoSpecialIdsGuard:
+    """Tests for _olmo_special_ids token resolution and its absence guard."""
+
+    def test_real_tokenizer_resolves_ids(self, encoder: ConversationEncoder) -> None:
+        special = encoder._olmo_special_ids()
+        assert special is not None
+        assert special["assistant_token_id"] == 78191
+        assert special["newline_id"] == 198
+        assert encoder.tokenizer.eos_token_id in special["terminator_ids"]
+
+    def test_tokenizer_without_im_start_returns_none(self) -> None:
+        # gpt2 has no <|im_start|>; an olmo-looking name must not pass the guard
+        # (convert_tokens_to_ids would return the unk id instead of failing)
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        fake = ConversationEncoder(tokenizer, model_name="my-olmo-variant")
+        assert fake._is_olmo()
+        assert fake._olmo_special_ids() is None
 
 
 class TestOlmoModelConfigs:

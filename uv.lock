@@ -344,12 +344,14 @@ dependencies = [
     { name = "torch" },
     { name = "tqdm" },
     { name = "transformers" },
-    { name = "vllm" },
 ]
 
 [package.optional-dependencies]
 dev = [
     { name = "pytest" },
+]
+gpu = [
+    { name = "vllm" },
 ]
 
 [package.metadata]
@@ -369,9 +371,9 @@ requires-dist = [
     { name = "torch", specifier = ">=2.0" },
     { name = "tqdm" },
     { name = "transformers", specifier = ">=4.40" },
-    { name = "vllm" },
+    { name = "vllm", marker = "extra == 'gpu'" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "gpu"]
 
 [[package]]
 name = "astor"

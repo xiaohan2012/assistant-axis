@@ -40,7 +40,11 @@ MODEL_CONFIGS = {
         "capping_config": "llama-3.3-70b/capping_config.pt",
         "capping_experiment": "layers_56:72-p0.25",
     },
-    # Olmo 3 7B Instruct track (persona-shift): one entry per post-training stage
+    # Olmo 3 7B Instruct track (persona-shift): one entry per post-training stage.
+    # The base (pre-trained) entry provides layer metadata only: the base
+    # tokenizer has no chat template, so the chat-template encoder paths
+    # (ConversationEncoder, ActivationExtractor) do not apply to it. Base-model
+    # extraction goes through a document-frame path instead.
     "allenai/Olmo-3-1025-7B": {
         "target_layer": 16,
         "total_layers": 32,

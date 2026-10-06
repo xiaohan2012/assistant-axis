@@ -262,15 +262,17 @@ class ConversationEncoder:
         Returns None if the tokenizer does not expose the expected tokens,
         in which case callers should fall back to the generic methods.
         """
-        try:
-            im_start_id = self.tokenizer.convert_tokens_to_ids('<|im_start|>')
-            im_end_id = self.tokenizer.convert_tokens_to_ids('<|im_end|>')
-            user_token_id = self.tokenizer.convert_tokens_to_ids('user')
-            assistant_token_id = self.tokenizer.convert_tokens_to_ids('assistant')
-        except (KeyError, ValueError):
+        # Look up via the vocab: convert_tokens_to_ids returns the unk id for
+        # missing tokens (which equals eos for this tokenizer family), so it
+        # cannot be used to detect absence.
+        vocab = self.tokenizer.get_vocab()
+        required = ('<|im_start|>', '<|im_end|>', 'user', 'assistant')
+        if any(token not in vocab for token in required):
             return None
-        if None in (im_start_id, im_end_id, user_token_id, assistant_token_id):
-            return None
+        im_start_id = vocab['<|im_start|>']
+        im_end_id = vocab['<|im_end|>']
+        user_token_id = vocab['user']
+        assistant_token_id = vocab['assistant']
 
         # The template puts a plain newline after the role name; resolve its id
         # so it can be excluded from content spans.
@@ -301,9 +303,12 @@ class ConversationEncoder:
         """
         Olmo-specific implementation for extracting response token indices.
 
-        Olmo 3 uses an im_start-style template like Qwen, with two differences:
-        the final assistant turn is terminated by the EOS token instead of
-        <|im_end|>, and there are no thinking tokens.
+        Olmo 3 uses an im_start-style template like Qwen, with the final
+        assistant turn terminated by the EOS token instead of <|im_end|>.
+
+        Written for the Instruct track, which has no thinking tokens. Think
+        checkpoints also match _is_olmo but their reasoning traces are NOT
+        filtered out here; add that before using Think models.
         """
         if per_turn:
             all_turn_indices = []
@@ -327,7 +332,11 @@ class ConversationEncoder:
                 all_token_ids[i + 1] == special['assistant_token_id']):
 
                 response_start = i + 2
-                # Skip the single newline the template emits after the role name
+                # Skip the single newline the template emits after the role
+                # name. If the content itself starts with whitespace, BPE can
+                # merge that newline with the content's leading whitespace into
+                # a different token (e.g. '\n\n'); that merged token is kept,
+                # so one template newline then leaks into the span.
                 if (response_start < len(all_token_ids) and
                     all_token_ids[response_start] == special['newline_id']):
                     response_start += 1
@@ -722,10 +731,13 @@ class ConversationEncoder:
 
         spans = []
 
-        # Non-system messages, in order, to match against the spans found
+        # User/assistant messages, in order, to match against the spans found.
+        # Tool and environment messages render as <|im_start|>environment
+        # blocks, which the scanner skips, so they must not appear here either
+        # or every later turn desynchronizes.
         expected_turns = []
         for msg in conversation:
-            if msg["role"] != "system":
+            if msg["role"] in ("user", "assistant"):
                 expected_turns.append((msg["role"], msg.get("content", "")))
 
         turn_idx = 0
@@ -745,7 +757,11 @@ class ConversationEncoder:
                     continue
 
                 content_start = i + 2
-                # Skip the single newline the template emits after the role name
+                # Skip the single newline the template emits after the role
+                # name. If the content itself starts with whitespace, BPE can
+                # merge that newline with the content's leading whitespace into
+                # a different token (e.g. '\n\n'); that merged token is kept,
+                # so one template newline then leaks into the span.
                 if (content_start < len(full_ids) and
                     full_ids[content_start] == special['newline_id']):
                     content_start += 1
@@ -761,7 +777,10 @@ class ConversationEncoder:
                 if turn_idx < len(expected_turns):
                     expected_role, expected_text = expected_turns[turn_idx]
 
-                    if role == expected_role and content_end > content_start:
+                    # Keep empty turns (start == end) so span positions stay
+                    # aligned with the conversation; downstream consumers index
+                    # spans positionally and must see every user/assistant turn.
+                    if role == expected_role:
                         spans.append({
                             "turn": turn_idx,
                             "role": role,
