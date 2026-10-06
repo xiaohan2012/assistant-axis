@@ -287,12 +287,38 @@ class ConversationEncoder:
 
         return {
             'im_start_id': im_start_id,
-            'im_end_id': im_end_id,
             'user_token_id': user_token_id,
             'assistant_token_id': assistant_token_id,
             'newline_id': newline_id,
             'terminator_ids': terminator_ids,
         }
+
+    @staticmethod
+    def _olmo_content_bounds(
+        token_ids: List[int],
+        im_start_pos: int,
+        special: Dict[str, Any],
+    ) -> Tuple[int, int]:
+        """
+        Content token bounds [start, end) for the turn opening at im_start_pos.
+
+        Skips the single newline the template emits after the role name. If
+        the content itself starts with whitespace, BPE can merge that newline
+        with the content's leading whitespace into a different token
+        (e.g. '\\n\\n'); that merged token is kept, so one template newline then
+        leaks into the span. The turn ends at <|im_end|>, or at EOS on the
+        final turn; an unterminated turn (e.g. truncated text) takes the rest
+        of the sequence.
+        """
+        content_start = im_start_pos + 2
+        if (content_start < len(token_ids) and
+            token_ids[content_start] == special['newline_id']):
+            content_start += 1
+
+        for j in range(content_start, len(token_ids)):
+            if token_ids[j] in special['terminator_ids']:
+                return content_start, j  # Don't include the terminator token
+        return content_start, len(token_ids)
 
     def _get_response_indices_olmo(
         self,
@@ -331,26 +357,9 @@ class ConversationEncoder:
                 all_token_ids[i] == special['im_start_id'] and
                 all_token_ids[i + 1] == special['assistant_token_id']):
 
-                response_start = i + 2
-                # Skip the single newline the template emits after the role
-                # name. If the content itself starts with whitespace, BPE can
-                # merge that newline with the content's leading whitespace into
-                # a different token (e.g. '\n\n'); that merged token is kept,
-                # so one template newline then leaks into the span.
-                if (response_start < len(all_token_ids) and
-                    all_token_ids[response_start] == special['newline_id']):
-                    response_start += 1
-
-                # Find the turn terminator (<|im_end|>, or EOS on the final turn)
-                response_end = None
-                for j in range(response_start, len(all_token_ids)):
-                    if all_token_ids[j] in special['terminator_ids']:
-                        response_end = j  # Don't include the terminator token
-                        break
-                if response_end is None:
-                    # Unterminated turn (e.g. truncated text): take the rest
-                    response_end = len(all_token_ids)
-
+                response_start, response_end = self._olmo_content_bounds(
+                    all_token_ids, i, special
+                )
                 turn_indices = list(range(response_start, response_end))
                 if per_turn:
                     all_turn_indices.append(turn_indices)
@@ -756,23 +765,9 @@ class ConversationEncoder:
                     i += 1
                     continue
 
-                content_start = i + 2
-                # Skip the single newline the template emits after the role
-                # name. If the content itself starts with whitespace, BPE can
-                # merge that newline with the content's leading whitespace into
-                # a different token (e.g. '\n\n'); that merged token is kept,
-                # so one template newline then leaks into the span.
-                if (content_start < len(full_ids) and
-                    full_ids[content_start] == special['newline_id']):
-                    content_start += 1
-
-                content_end = None
-                for j in range(content_start, len(full_ids)):
-                    if full_ids[j] in special['terminator_ids']:
-                        content_end = j  # Don't include the terminator token
-                        break
-                if content_end is None:
-                    content_end = len(full_ids)
+                content_start, content_end = self._olmo_content_bounds(
+                    full_ids, i, special
+                )
 
                 if turn_idx < len(expected_turns):
                     expected_role, expected_text = expected_turns[turn_idx]
