@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      # Upstream files are not ruff-formatted, so only fork-owned files are format-checked.
+      # Add new fork-owned files here.
+      - name: Ruff format check
+        run: uv run ruff format --check assistant_axis/tests/test_olmo_conversation.py
+
+      - name: Ty type check
+        run: uv run ty check
+
+      - name: Cache HF tokenizers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-tokenizers-${{ runner.os }}
+
+      # test_generation.py has a pre-existing upstream collection error (imports the removed supports_system_prompt)
+      - name: Pytest
+        run: uv run pytest assistant_axis/tests --ignore=assistant_axis/tests/test_generation.py
