@@ -71,6 +71,7 @@ async def process_role(
     max_tokens: int,
     batch_size: int,
     existing_scores: Dict[str, int],
+    extra_body: Optional[dict] = None,
 ) -> dict:
     """Process a single role and return scores."""
     # Build prompts for each response
@@ -115,7 +116,8 @@ async def process_role(
         model=judge_model,
         max_tokens=max_tokens,
         rate_limiter=rate_limiter,
-        batch_size=batch_size
+        batch_size=batch_size,
+        extra_body=extra_body
     )
 
     # Parse scores
@@ -139,6 +141,11 @@ async def main_async():
     parser.add_argument("--batch_size", type=int, default=50, help="Concurrent batch size")
     parser.add_argument("--requests_per_second", type=int, default=100, help="Rate limit")
     parser.add_argument("--roles", nargs="+", help="Specific roles to process")
+    parser.add_argument(
+        "--judge_extra_body",
+        type=json.loads,
+        help='JSON merged into each judge request body, e.g. \'{"provider": {"order": ["z-ai"], "allow_fallbacks": false}}\'',
+    )
     parser.add_argument("--dry_run", action="store_true", help="Preview what would be processed without making API calls")
     args = parser.parse_args()
 
@@ -231,6 +238,7 @@ async def main_async():
                     logger.info("=" * 60)
                     logger.info(f"Model: {args.judge_model}")
                     logger.info(f"Max tokens: {args.max_tokens}")
+                    logger.info(f"Extra body: {args.judge_extra_body}")
                     logger.info("-" * 60)
                     logger.info(sample_prompt)
                     logger.info("=" * 60 + "\n")
@@ -308,6 +316,7 @@ async def main_async():
                 max_tokens=args.max_tokens,
                 batch_size=args.batch_size,
                 existing_scores=existing_scores,
+                extra_body=args.judge_extra_body,
             )
 
             # Merge scores
