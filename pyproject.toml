@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "ruff>=0.8", "ty>=0.0.85"]
 # vLLM only installs cleanly on CUDA Linux.
 # generation.py imports it lazily, so CPU-only environments (e.g. macOS dev) can use the rest of the package.
 gpu = ["vllm"]
@@ -33,3 +33,28 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["assistant_axis"]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+# Pinned to the pre-0.17 default set; the newer, larger default flags hundreds of upstream lines.
+select = ["E4", "E7", "E9", "F"]
+
+# Pre-existing upstream violations, ignored rather than fixed to keep the diff against upstream small.
+[tool.ruff.lint.per-file-ignores]
+"assistant_axis/axis.py" = ["F401"]
+"assistant_axis/internals/activations.py" = ["E722", "F841"]
+"assistant_axis/internals/conversation.py" = ["F841"]
+"assistant_axis/internals/spans.py" = ["F401"]
+"assistant_axis/judge.py" = ["F401"]
+"assistant_axis/steering.py" = ["F541"]
+"assistant_axis/tests/test_axis.py" = ["F401"]
+"pipeline/1_generate.py" = ["F401"]
+"pipeline/3_judge.py" = ["F401"]
+"pipeline/5_axis.py" = ["F541"]
+
+# Upstream code has ~100 ty diagnostics, mostly from annotating tokenizers as AutoTokenizer, so only fork-owned files are type-checked.
+[tool.ty.src]
+include = ["assistant_axis/tests/test_olmo_conversation.py"]

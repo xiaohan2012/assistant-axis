@@ -5,10 +5,10 @@ Uses the real Olmo 3 tokenizer, downloaded from HuggingFace on first run.
 The span logic under test is meaningless against a mocked tokenizer.
 """
 
-from typing import Dict, List
+from typing import Dict, List, cast
 
 import pytest
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from assistant_axis.internals.conversation import ConversationEncoder
 from assistant_axis.models import MODEL_CONFIGS, get_config
@@ -25,10 +25,21 @@ OLMO_CHECKPOINTS = [
 SPECIAL_MARKERS = ["<|im_start|>", "<|im_end|>", "<|endoftext|>"]
 
 
+# Tests use this fixture instead of encoder.tokenizer, which upstream annotates as AutoTokenizer.
 @pytest.fixture(scope="module")
-def encoder() -> ConversationEncoder:
-    tokenizer = AutoTokenizer.from_pretrained(OLMO_SFT)
-    return ConversationEncoder(tokenizer, model_name=OLMO_SFT)
+def tokenizer() -> PreTrainedTokenizerBase:
+    return AutoTokenizer.from_pretrained(OLMO_SFT)
+
+
+@pytest.fixture(scope="module")
+def encoder(tokenizer: PreTrainedTokenizerBase) -> ConversationEncoder:
+    return ConversationEncoder(tokenizer, model_name=OLMO_SFT)  # ty: ignore[invalid-argument-type]
+
+
+def per_turn_indices(
+    encoder: ConversationEncoder, conversation: List[Dict[str, str]]
+) -> List[List[int]]:
+    return cast(List[List[int]], encoder.response_indices(conversation, per_turn=True))
 
 
 class TestGetResponseIndicesOlmo:
@@ -53,41 +64,47 @@ class TestGetResponseIndicesOlmo:
         assert encoder._is_olmo()
         assert not encoder._is_qwen()
 
-    def test_single_turn_decodes_to_exact_content(self, encoder: ConversationEncoder) -> None:
+    def test_single_turn_decodes_to_exact_content(
+        self, encoder: ConversationEncoder, tokenizer: PreTrainedTokenizerBase
+    ) -> None:
         indices = encoder.response_indices(self.single_turn)
-        full_formatted = encoder.tokenizer.apply_chat_template(
+        full_formatted = tokenizer.apply_chat_template(
             self.single_turn, tokenize=False, add_generation_prompt=False
         )
-        all_ids = encoder.tokenizer(full_formatted, add_special_tokens=False)["input_ids"]
-        decoded = encoder.tokenizer.decode([all_ids[i] for i in indices])
+        all_ids = tokenizer(full_formatted, add_special_tokens=False)["input_ids"]
+        decoded = tokenizer.decode([all_ids[i] for i in indices])
         assert decoded == "Ahoy matey!"
 
-    def test_excludes_markers_and_role_newline(self, encoder: ConversationEncoder) -> None:
+    def test_excludes_markers_and_role_newline(
+        self, encoder: ConversationEncoder, tokenizer: PreTrainedTokenizerBase
+    ) -> None:
         indices = encoder.response_indices(self.single_turn)
-        full_formatted = encoder.tokenizer.apply_chat_template(
+        full_formatted = tokenizer.apply_chat_template(
             self.single_turn, tokenize=False, add_generation_prompt=False
         )
-        all_ids = encoder.tokenizer(full_formatted, add_special_tokens=False)["input_ids"]
-        decoded = encoder.tokenizer.decode([all_ids[i] for i in indices])
+        all_ids = tokenizer(full_formatted, add_special_tokens=False)["input_ids"]
+        decoded = tokenizer.decode([all_ids[i] for i in indices])
         for marker in SPECIAL_MARKERS:
             assert marker not in decoded
         assert not decoded.startswith("\n")
 
-    def test_multi_turn_per_turn(self, encoder: ConversationEncoder) -> None:
-        turns = encoder.response_indices(self.multi_turn, per_turn=True)
+    def test_multi_turn_per_turn(
+        self, encoder: ConversationEncoder, tokenizer: PreTrainedTokenizerBase
+    ) -> None:
+        turns = per_turn_indices(encoder, self.multi_turn)
         assert len(turns) == 2
-        full_formatted = encoder.tokenizer.apply_chat_template(
+        full_formatted = tokenizer.apply_chat_template(
             self.multi_turn, tokenize=False, add_generation_prompt=False
         )
-        all_ids = encoder.tokenizer(full_formatted, add_special_tokens=False)["input_ids"]
+        all_ids = tokenizer(full_formatted, add_special_tokens=False)["input_ids"]
         expected = ["Ahoy matey!", "Arr, the seven seas await."]
         for turn_indices, expected_text in zip(turns, expected):
-            decoded = encoder.tokenizer.decode([all_ids[i] for i in turn_indices])
+            decoded = tokenizer.decode([all_ids[i] for i in turn_indices])
             assert decoded == expected_text
 
     def test_multi_turn_flat_is_concatenation(self, encoder: ConversationEncoder) -> None:
         flat = encoder.response_indices(self.multi_turn)
-        turns = encoder.response_indices(self.multi_turn, per_turn=True)
+        turns = per_turn_indices(encoder, self.multi_turn)
         assert flat == [i for turn in turns for i in turn]
 
     def test_no_assistant_turn_returns_empty(self, encoder: ConversationEncoder) -> None:
@@ -102,7 +119,7 @@ class TestGetResponseIndicesOlmo:
             {"role": "user", "content": "Say again"},
             {"role": "assistant", "content": "ok"},
         ]
-        turns = encoder.response_indices(conversation, per_turn=True)
+        turns = per_turn_indices(encoder, conversation)
         assert len(turns) == 2
         assert turns[0] == []
         assert len(turns[1]) > 0
@@ -126,12 +143,14 @@ class TestBuildTurnSpansOlmo:
         assert [s["role"] for s in spans] == ["user", "assistant", "user", "assistant"]
         assert [s["turn"] for s in spans] == [0, 1, 2, 3]
 
-    def test_span_tokens_decode_to_content(self, encoder: ConversationEncoder) -> None:
+    def test_span_tokens_decode_to_content(
+        self, encoder: ConversationEncoder, tokenizer: PreTrainedTokenizerBase
+    ) -> None:
         full_ids, spans = encoder.build_turn_spans(self.conversation)
         expected_texts = [m["content"] for m in self.conversation if m["role"] != "system"]
         assert len(spans) == len(expected_texts)
         for span, expected_text in zip(spans, expected_texts):
-            decoded = encoder.tokenizer.decode(full_ids[span["start"]:span["end"]])
+            decoded = tokenizer.decode(full_ids[span["start"] : span["end"]])
             assert decoded == expected_text
 
     def test_n_tokens_matches_span_bounds(self, encoder: ConversationEncoder) -> None:
@@ -141,7 +160,9 @@ class TestBuildTurnSpansOlmo:
             assert span["n_tokens"] == span["end"] - span["start"]
             assert span["n_tokens"] > 0
 
-    def test_tool_turns_do_not_desync_spans(self, encoder: ConversationEncoder) -> None:
+    def test_tool_turns_do_not_desync_spans(
+        self, encoder: ConversationEncoder, tokenizer: PreTrainedTokenizerBase
+    ) -> None:
         conversation = [
             {"role": "user", "content": "What is 2+2?"},
             {"role": "assistant", "content": "Let me check."},
@@ -150,7 +171,7 @@ class TestBuildTurnSpansOlmo:
         ]
         full_ids, spans = encoder.build_turn_spans(conversation)
         assert [s["role"] for s in spans] == ["user", "assistant", "assistant"]
-        decoded_last = encoder.tokenizer.decode(full_ids[spans[-1]["start"]:spans[-1]["end"]])
+        decoded_last = tokenizer.decode(full_ids[spans[-1]["start"] : spans[-1]["end"]])
         assert decoded_last == "The answer is 4."
 
     def test_empty_assistant_turn_keeps_span_position(self, encoder: ConversationEncoder) -> None:
@@ -169,12 +190,14 @@ class TestBuildTurnSpansOlmo:
 class TestOlmoSpecialIdsGuard:
     """Tests for _olmo_special_ids token resolution and its absence guard."""
 
-    def test_real_tokenizer_resolves_ids(self, encoder: ConversationEncoder) -> None:
+    def test_real_tokenizer_resolves_ids(
+        self, encoder: ConversationEncoder, tokenizer: PreTrainedTokenizerBase
+    ) -> None:
         special = encoder._olmo_special_ids()
         assert special is not None
         assert special["assistant_token_id"] == 78191
         assert special["newline_id"] == 198
-        assert encoder.tokenizer.eos_token_id in special["terminator_ids"]
+        assert tokenizer.eos_token_id in special["terminator_ids"]
 
     def test_tokenizer_without_im_start_returns_none(self) -> None:
         # gpt2 has no <|im_start|>, so an olmo-looking name must not pass the guard.
