@@ -98,9 +98,14 @@ async def call_judge_single(
     prompt: str,
     model: str,
     max_tokens: int,
-    rate_limiter: RateLimiter
+    rate_limiter: RateLimiter,
+    extra_body: Optional[Dict[str, Any]] = None
 ) -> Optional[str]:
-    """Call the judge model with a single prompt."""
+    """Call the judge model with a single prompt.
+
+    `extra_body` is merged into the request body, for fields the OpenAI client does not know.
+    OpenRouter uses it for provider routing and reasoning settings.
+    """
     await rate_limiter.acquire()
 
     try:
@@ -108,7 +113,8 @@ async def call_judge_single(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             max_completion_tokens=max_tokens,
-            temperature=1
+            temperature=1,
+            extra_body=extra_body
         )
 
         if response.choices and response.choices[0].message.content:
@@ -126,7 +132,8 @@ async def call_judge_batch(
     model: str,
     max_tokens: int,
     rate_limiter: RateLimiter,
-    batch_size: int = 50
+    batch_size: int = 50,
+    extra_body: Optional[Dict[str, Any]] = None
 ) -> List[Optional[str]]:
     """Call the judge model with multiple prompts concurrently."""
     results = []
@@ -135,7 +142,7 @@ async def call_judge_batch(
         batch = prompts[i:i + batch_size]
 
         tasks = [
-            call_judge_single(client, prompt, model, max_tokens, rate_limiter)
+            call_judge_single(client, prompt, model, max_tokens, rate_limiter, extra_body)
             for prompt in batch
         ]
 
@@ -161,6 +168,7 @@ async def score_responses(
     max_tokens: int = 10,
     requests_per_second: int = 100,
     batch_size: int = 50,
+    extra_body: Optional[Dict[str, Any]] = None,
 ) -> List[Optional[int]]:
     """
     Score a list of responses using an LLM judge.
@@ -172,6 +180,7 @@ async def score_responses(
         max_tokens: Max tokens for judge response
         requests_per_second: Rate limit for API calls
         batch_size: Concurrent batch size
+        extra_body: Extra request body fields, e.g. OpenRouter provider routing
 
     Returns:
         List of scores (0-3) or None for failed parsing
@@ -199,7 +208,8 @@ async def score_responses(
         model=judge_model,
         max_tokens=max_tokens,
         rate_limiter=rate_limiter,
-        batch_size=batch_size
+        batch_size=batch_size,
+        extra_body=extra_body
     )
 
     # Parse scores
@@ -218,6 +228,7 @@ def score_responses_sync(
     max_tokens: int = 10,
     requests_per_second: int = 100,
     batch_size: int = 50,
+    extra_body: Optional[Dict[str, Any]] = None,
 ) -> List[Optional[int]]:
     """
     Synchronous wrapper for score_responses.
@@ -229,6 +240,7 @@ def score_responses_sync(
         max_tokens: Max tokens for judge response
         requests_per_second: Rate limit for API calls
         batch_size: Concurrent batch size
+        extra_body: Extra request body fields, e.g. OpenRouter provider routing
 
     Returns:
         List of scores (0-3) or None for failed parsing
@@ -239,5 +251,6 @@ def score_responses_sync(
         judge_model=judge_model,
         max_tokens=max_tokens,
         requests_per_second=requests_per_second,
-        batch_size=batch_size
+        batch_size=batch_size,
+        extra_body=extra_body
     ))
