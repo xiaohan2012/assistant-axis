@@ -57,4 +57,4 @@ select = ["E4", "E7", "E9", "F"]
 
 # Upstream code has ~100 ty diagnostics, mostly from annotating tokenizers as AutoTokenizer, so only fork-owned files are type-checked.
 [tool.ty.src]
-include = ["assistant_axis/tests/test_olmo_conversation.py"]
+include = ["assistant_axis/tests/test_olmo_conversation.py", "assistant_axis/tests/test_judge.py"]

@@ -28,7 +28,7 @@ jobs:
       # Upstream files are not ruff-formatted, so only fork-owned files are format-checked.
       # Add new fork-owned files here.
       - name: Ruff format check
-        run: uv run ruff format --check assistant_axis/tests/test_olmo_conversation.py
+        run: uv run ruff format --check assistant_axis/tests/test_olmo_conversation.py assistant_axis/tests/test_judge.py
 
       - name: Ty type check
         run: uv run ty check
